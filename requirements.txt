@@ -1,0 +1,5 @@
+boto3>=1.20.12
+numpy>=1.21.2
+openai>=0.11.0
+sounddevice>=0.4.3
+amazon-transcribe>=0.5.1
