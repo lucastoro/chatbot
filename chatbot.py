@@ -13,6 +13,10 @@ from amazon_transcribe.handlers import TranscriptResultStreamHandler
 from amazon_transcribe.model import TranscriptEvent, TranscriptResultStream
 
 
+# when true stops recording from the mic.
+silence = False
+
+
 def from_config(filename: str, label: str, section: str = None):
     config_path = os.path.sep.join([
         os.environ['HOME'],
@@ -47,10 +51,10 @@ class SpeechSynthesizer(ABC):
         """Returns the buffer and the sampling rate"""
         pass
 
-    def speak(self, text: str):
-        """Convenience utility to playback a given text"""
+    def speak(self, text: str, blocking: bool = False):
+        """Convenience utility to playback a given text."""
         wave, rate = self.synthesize(text)
-        sounddevice.play(wave, samplerate=rate)
+        sounddevice.play(wave, samplerate=rate, blocking=blocking)
 
 
 class ChatPeer(ABC):
@@ -173,12 +177,19 @@ class MyEventHandler(TranscriptResultStreamHandler):
         for result in transcript_event.transcript.results:
             if not result.is_partial and len(result.alternatives) > 0:
 
+                global silence
+
                 transcript = result.alternatives[0].transcript
                 print(f"You said: {transcript}")
+
                 response = self.peer.chat(transcript)
                 print(f"Bot said: {response}")
-                self.synth.speak(response)
-                break
+
+                # stops listening on the mic while playing the
+                # reponse back to avoid the feedback loop.
+                silence = True
+                self.synth.speak(response, blocking=True)
+                silence = False
 
 
 async def mic_stream():
@@ -188,10 +199,11 @@ async def mic_stream():
     input_queue = asyncio.Queue()
 
     def callback(indata, frame_count, time_info, status):
-        loop.call_soon_threadsafe(
-            input_queue.put_nowait,
-            (bytes(indata), status)
-        )
+        if not silence:
+            loop.call_soon_threadsafe(
+                input_queue.put_nowait,
+                (bytes(indata), status)
+            )
 
     # Be sure to use the correct parameters for the audio stream that matches
     # the audio formats described for the source language you'll be using:
@@ -213,7 +225,7 @@ async def mic_stream():
 async def record_audio(stream):
     # This connects the raw audio chunks generator coming from the microphone
     # and passes them along to the transcription stream.
-    async for chunk, status in mic_stream():
+    async for chunk, _ in mic_stream():
         await stream.send_audio_event(audio_chunk=chunk)
     await stream.end_stream()
 
