@@ -8,6 +8,7 @@ import boto3
 import openai
 import numpy
 import sounddevice
+from pathlib import Path
 from amazon_transcribe.client import TranscribeStreamingClient
 from amazon_transcribe.handlers import TranscriptResultStreamHandler
 from amazon_transcribe.model import TranscriptEvent, TranscriptResultStream
@@ -17,9 +18,9 @@ from amazon_transcribe.model import TranscriptEvent, TranscriptResultStream
 silence = False
 
 
-def from_config(filename: str, label: str, section: str = None):
+def from_config(filename: str, label: str, section: str|None = None):
     config_path = os.path.sep.join([
-        os.environ['HOME'],
+        str(Path.home()),
         filename.replace('/', os.path.sep)
     ])
 
@@ -99,7 +100,7 @@ class Polly(SpeechSynthesizer):
         ), 16000
 
 
-class OpenAiFriend(ChatPeer):
+class ChatGPT(ChatPeer):
 
     """
     OpenAI-based chat peer.
@@ -108,59 +109,48 @@ class OpenAiFriend(ChatPeer):
     """
 
     def __init__(self,
-                 api_key: str = None,
-                 max_length: int = 10,
-                 engine: str = 'davinci'):
+                 api_key: str|None = None,
+                 max_length: int = 10):
         self.conversation = []
         self.max_length = max_length
-        self.engine = engine
         self.api_key = api_key
-
-    def _flatten_conversation(self) -> str:
-        chat = [
-            f"You: {self.conversation[i]}" if i % 2 == 0
-            else f"Friend: {self.conversation[i]}"
-            for i in range(len(self.conversation))
-        ]
-        chat.append('Friend:')
-        return '\n'.join(chat)
+        self.conversation = [{
+            "role": "system",
+            "content": "You are a helpful assistant."
+        }]
 
     def chat(self, message: str) -> str:
 
         # store your message in the conversation
-        self.conversation.append(message)
+        self.conversation.append({
+            'role': 'user',
+            'content': message
+        })
 
         # remove older messages from the conv. eventually
         if len(self.conversation) > self.max_length:
             # remove the first 2 messages, mine and his
             self.conversation = self.conversation[2:]
 
-        # converts the conversation log to a 'chat-like' text
-        prompt = self._flatten_conversation()
-
-        # submit the chat transcript to OpenAI
-        response = openai.Completion.create(
+        response = openai.ChatCompletion.create(
             api_key=self.api_key,
-            engine=self.engine,
-            prompt=prompt,
-            temperature=0.4,
-            max_tokens=60,
-            top_p=1.0,
-            frequency_penalty=0.5,
-            presence_penalty=0.0,
-            stop=["You:"]
+            model="gpt-3.5-turbo",
+            messages=self.conversation,
         )
 
         # decode and cleanup the bot's response
-        responseText = response['choices'][0]['text'].strip()
+        message = response['choices'][0]['message']
+        content = message['content']
+        role = message['role']
 
-        # sometimes the bot returns multiple messages back
-        responseText = responseText.replace("\nFriend:", ".")
 
         # store his message in the conversation
-        self.conversation.append(responseText)
+        self.conversation.append({
+            'role': role,
+            'content': content
+        })
 
-        return responseText
+        return content
 
 
 class MyEventHandler(TranscriptResultStreamHandler):
@@ -242,7 +232,7 @@ async def basic_transcribe():
     # OpenAI API-key is assumed to be in ~/.openai/key
     if 'OPENAI_API_KEY' not in os.environ:
         openai.api_key_path = os.path.join(
-            os.environ['HOME'],
+           str(Path.home()),
             '.openai',
             'key'
         )
@@ -257,7 +247,7 @@ async def basic_transcribe():
         media_encoding="pcm",
     )
 
-    peer = OpenAiFriend(engine='davinci')
+    peer = ChatGPT()
     synt = Polly(voice_id='Matthew')
 
     # Instantiate our handler and start processing events
